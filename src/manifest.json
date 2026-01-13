@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "O'Reilly Extension",
+  "version": "1.0.0",
+  "description": "Chrome extension for O'Reilly",
+  "permissions": [
+    "debugger",
+    "storage",
+    "tabs",
+    "activeTab",
+    "downloads",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://*.oreilly.com/*"
+  ],
+  "background": {
+    "service_worker": "background/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://*.oreilly.com/*"],
+      "js": ["content/content.js"]
+    }
+  ]
+}
