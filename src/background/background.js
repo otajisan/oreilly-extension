@@ -484,31 +484,25 @@ async function mergeAndDownloadPDF(bookTitle = null) {
     // ファイル名を生成
     const fileName = generateFileName(bookTitle);
     
-    // Blob URLを作成（大きなファイルでも効率的）
-    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-    const blobUrl = URL.createObjectURL(blob);
+    // Base64エンコードしてデータURLを作成
+    // Note: Service WorkerではURL.createObjectURL()が使用できないため、
+    // Base64方式を使用します
+    const base64String = uint8ArrayToBase64(pdfBytes);
+    const dataUrl = `data:application/pdf;base64,${base64String}`;
     
     // ダウンロード
     try {
       await chrome.downloads.download({
-        url: blobUrl,
+        url: dataUrl,
         filename: fileName,
         saveAs: true
       });
-      
-      // Blob URLをクリーンアップ（ダウンロード開始後、少し遅延してから）
-      setTimeout(() => {
-        URL.revokeObjectURL(blobUrl);
-        console.log('[Background] Blob URLをクリーンアップしました');
-      }, 1000);
       
       console.log(`[Background] PDFをダウンロードしました: ${fileName}`);
       sendStatusUpdate(`PDFダウンロード完了: ${fileName}`);
       
       return { success: true, fileName: fileName, pageCount: pages.length };
     } catch (downloadError) {
-      // エラー時もBlob URLをクリーンアップ
-      URL.revokeObjectURL(blobUrl);
       throw new Error(`ダウンロードに失敗しました: ${downloadError.message}`);
     }
     
