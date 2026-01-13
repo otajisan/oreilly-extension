@@ -2,6 +2,7 @@
 const startUrlInput = document.getElementById('startUrl');
 const btnStart = document.getElementById('btnStart');
 const btnStop = document.getElementById('btnStop');
+const btnMerge = document.getElementById('btnMerge');
 const statusArea = document.getElementById('statusArea');
 
 // 状態管理
@@ -28,6 +29,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // ボタンイベントリスナー
   btnStart.addEventListener('click', handleStart);
   btnStop.addEventListener('click', handleStop);
+  btnMerge.addEventListener('click', handleMerge);
 });
 
 // 保存されたURLを復元
@@ -151,4 +153,47 @@ function updateProgress(current, total) {
     statusArea.appendChild(progressElement);
   }
   progressElement.textContent = statusText;
+}
+
+// PDFマージボタンのハンドラー
+async function handleMerge() {
+  try {
+    // ボタンを無効化
+    btnMerge.disabled = true;
+    updateStatus('PDFマージ処理中...');
+    
+    // 書籍タイトルを取得（URLから抽出を試みる）
+    const url = startUrlInput.value.trim();
+    let bookTitle = null;
+    
+    if (url) {
+      try {
+        // URLから書籍名を抽出（例: /library/view/book-name/...）
+        const match = url.match(/\/library\/view\/([^/]+)/);
+        if (match) {
+          bookTitle = decodeURIComponent(match[1]).replace(/-/g, ' ');
+        }
+      } catch (e) {
+        // URL解析エラーは無視
+      }
+    }
+    
+    const response = await chrome.runtime.sendMessage({
+      type: 'MERGE_PDF',
+      bookTitle: bookTitle
+    });
+
+    if (response && response.success) {
+      updateStatus(`PDFダウンロード完了: ${response.fileName || 'merged.pdf'} (${response.pageCount || 0} ページ)`);
+    } else {
+      alert('PDFマージに失敗しました: ' + (response?.error || '不明なエラー'));
+      updateStatus('PDFマージに失敗しました');
+    }
+  } catch (error) {
+    console.error('PDFマージエラー:', error);
+    alert('PDFマージ処理中にエラーが発生しました: ' + error.message);
+    updateStatus('エラーが発生しました');
+  } finally {
+    btnMerge.disabled = false;
+  }
 }
