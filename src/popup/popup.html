@@ -103,6 +103,15 @@
       background-color: #da190b;
     }
 
+    .btn-merge {
+      background-color: #2196F3;
+      color: white;
+    }
+
+    .btn-merge:hover:not(:disabled) {
+      background-color: #0b7dda;
+    }
+
     .status-area {
       background-color: #f9f9f9;
       border: 1px solid #e0e0e0;
@@ -147,6 +156,10 @@
     <div class="button-group">
       <button id="btnStart" class="btn-start">取得開始</button>
       <button id="btnStop" class="btn-stop" disabled>停止</button>
+    </div>
+
+    <div class="button-group">
+      <button id="btnMerge" class="btn-merge">PDFマージ・ダウンロード</button>
     </div>
 
     <div class="status-area" id="statusArea">

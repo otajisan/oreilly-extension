@@ -1,5 +1,6 @@
 // Service Worker for O'Reilly Extension
 import { savePage, getAllPagesSorted, clearAllData } from '../lib/db.js';
+import { PDFDocument } from 'pdf-lib';
 // メッセージハンドリングとページ遷移制御
 
 // 処理状態の管理
@@ -9,23 +10,32 @@ let currentPageNumber = 0;
 
 // メッセージタイプ定数
 const MESSAGE_TYPES = {
+  START: 'start',
+  STOP: 'stop',
+  PDF_DATA: 'pdfData',
   NEXT_PAGE_REQUEST: 'NEXT_PAGE_REQUEST',
   PAGE_READY: 'PAGE_READY',
   NO_MORE_PAGES: 'NO_MORE_PAGES',
-  GENERATE_PDF: 'GENERATE_PDF'
+  GENERATE_PDF: 'GENERATE_PDF',
+  MERGE_PDF: 'MERGE_PDF'
 };
 
 // メッセージハンドラー
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log('[Background] メッセージを受信しました:', message);
   
-  if (message.type === 'start') {
+  // 後方互換性のため、文字列リテラルと定数の両方に対応
+  if (message.type === MESSAGE_TYPES.START || message.type === 'start') {
     handleStart(message.url, sendResponse);
     return true; // 非同期レスポンスのため
-  } else if (message.type === 'stop') {
+  }
+  
+  if (message.type === MESSAGE_TYPES.STOP || message.type === 'stop') {
     handleStop(sendResponse);
     return true; // 非同期レスポンスのため
-  } else if (message.type === 'pdfData') {
+  }
+  
+  if (message.type === MESSAGE_TYPES.PDF_DATA || message.type === 'pdfData') {
     // Issue #4のPDF生成ロジックから送信されるPDFデータを受け取る
     handlePdfData(message.pageNumber, message.data, sendResponse);
     return true; // 非同期レスポンスのため
@@ -68,6 +78,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // 非同期処理のためtrueを返す
   }
   
+  if (message.type === MESSAGE_TYPES.MERGE_PDF) {
+    console.log('[Background] PDFマージリクエストを受信しました');
+    (async () => {
+      try {
+        const result = await mergeAndDownloadPDF(message.bookTitle);
+        sendResponse(result);
+      } catch (error) {
+        console.error('[Background] PDFマージエラー:', error);
+        sendResponse({ success: false, error: error.message });
+      }
+    })();
+    return true; // 非同期処理のためtrueを返す
+  }
+  
+  // 未処理のメッセージタイプ
+  console.warn('[Background] 未処理のメッセージタイプ:', message.type);
   return false;
 });
 
@@ -237,6 +263,91 @@ function base64ToUint8Array(base64) {
 }
 
 /**
+ * Uint8ArrayをBase64文字列に変換する
+ * チャンクごとに処理し、配列にプッシュして最後にjoinすることでO(n)の時間計算量を実現
+ * 大きなPDF（50MB+）でも効率的に処理できる
+ * @param {Uint8Array} bytes - バイナリデータ
+ * @returns {string} Base64エンコードされた文字列
+ */
+function uint8ArrayToBase64(bytes) {
+  const CHUNK_SIZE = 8192; // 8KBチャンク（スタックオーバーフローを防ぐ）
+  const len = bytes.byteLength;
+  
+  // 小さな配列の場合は直接処理
+  if (len <= CHUNK_SIZE) {
+    try {
+      // Array.from()を使わず、直接Uint8Arrayを処理
+      const chars = new Array(len);
+      for (let i = 0; i < len; i++) {
+        chars[i] = bytes[i];
+      }
+      return btoa(String.fromCharCode.apply(null, chars));
+    } catch (e) {
+      // スタックオーバーフローの場合はチャンク処理にフォールバック
+    }
+  }
+  
+  // 大きな配列の場合はチャンクごとに処理
+  // 各チャンクを配列に変換してからString.fromCharCode.applyを使用
+  // 配列にプッシュして最後にjoinすることでO(n)の時間計算量を実現
+  const chunks = [];
+  for (let i = 0; i < len; i += CHUNK_SIZE) {
+    const chunkEnd = Math.min(i + CHUNK_SIZE, len);
+    const chunk = bytes.subarray(i, chunkEnd);
+    const chunkLen = chunk.length;
+    
+    try {
+      // Array.from()を使わず、直接Uint8Arrayを処理
+      const chars = new Array(chunkLen);
+      for (let j = 0; j < chunkLen; j++) {
+        chars[j] = chunk[j];
+      }
+      chunks.push(String.fromCharCode.apply(null, chars));
+    } catch (e) {
+      // スタックオーバーフローの場合は、さらに小さなチャンクに分割
+      // 小さなチャンク（1KB）に分割して、配列にプッシュして最後にjoin
+      const SMALL_CHUNK_SIZE = 1024; // 1KB
+      const smallChunks = [];
+      for (let j = 0; j < chunkLen; j += SMALL_CHUNK_SIZE) {
+        const smallChunkEnd = Math.min(j + SMALL_CHUNK_SIZE, chunkLen);
+        const smallChunk = chunk.subarray(j, smallChunkEnd);
+        const smallChunkLen = smallChunk.length;
+        
+        try {
+          // Array.from()を使わず、直接Uint8Arrayを処理
+          const chars = new Array(smallChunkLen);
+          for (let k = 0; k < smallChunkLen; k++) {
+            chars[k] = smallChunk[k];
+          }
+          smallChunks.push(String.fromCharCode.apply(null, chars));
+        } catch (e2) {
+          // それでもエラーの場合は、さらに小さく分割（256バイト）
+          const TINY_CHUNK_SIZE = 256;
+          const tinyChunks = [];
+          for (let k = 0; k < smallChunkLen; k += TINY_CHUNK_SIZE) {
+            const tinyChunkEnd = Math.min(k + TINY_CHUNK_SIZE, smallChunkLen);
+            const tinyChunk = smallChunk.subarray(k, tinyChunkEnd);
+            const tinyChunkLen = tinyChunk.length;
+            
+            // Array.from()を使わず、直接Uint8Arrayを処理
+            const chars = new Array(tinyChunkLen);
+            for (let l = 0; l < tinyChunkLen; l++) {
+              chars[l] = tinyChunk[l];
+            }
+            tinyChunks.push(String.fromCharCode.apply(null, chars));
+          }
+          smallChunks.push(tinyChunks.join(''));
+        }
+      }
+      chunks.push(smallChunks.join(''));
+    }
+  }
+  
+  // すべてのチャンクを結合してBase64エンコード
+  return btoa(chunks.join(''));
+}
+
+/**
  * 指定したタブのページをPDF化する
  * @param {number} tabId - PDF化するタブのID
  * @returns {Promise<{success: boolean, data?: Uint8Array, error?: string}>}
@@ -315,5 +426,112 @@ async function generatePDF(tabId) {
 //     }
 //   });
 // });
+
+/**
+ * IndexedDBに保存されたPDFページをマージしてダウンロード
+ * Issue #6: pdf-libを使用したPDFマージとダウンロード
+ * @param {string} bookTitle - 書籍タイトル（オプション）
+ * @returns {Promise<{success: boolean, error?: string}>}
+ */
+async function mergeAndDownloadPDF(bookTitle = null) {
+  try {
+    console.log('[Background] PDFマージ処理を開始します');
+    
+    // IndexedDBから全ページを取得
+    const pages = await getAllPagesSorted();
+    
+    if (pages.length === 0) {
+      throw new Error('マージするPDFページがありません');
+    }
+    
+    console.log(`[Background] ${pages.length} ページを取得しました`);
+    sendStatusUpdate(`PDFマージ中... (${pages.length} ページ)`);
+    
+    // 新しいPDFドキュメントを作成
+    const mergedPdf = await PDFDocument.create();
+    
+    // 各ページを順番にマージ
+    for (let i = 0; i < pages.length; i++) {
+      const page = pages[i];
+      console.log(`[Background] ページ ${page.pageNumber} をマージ中...`);
+      
+      try {
+        // PDFドキュメントを読み込む
+        const pdfDoc = await PDFDocument.load(page.data);
+        
+        // 全ページをコピー
+        const pageIndices = pdfDoc.getPageIndices();
+        const copiedPages = await mergedPdf.copyPages(pdfDoc, pageIndices);
+        
+        // コピーしたページを追加
+        copiedPages.forEach((copiedPage) => {
+          mergedPdf.addPage(copiedPage);
+        });
+        
+        // メモリを解放
+        page.data = null;
+      } catch (pageError) {
+        console.error(`[Background] ページ ${page.pageNumber} のマージエラー:`, pageError);
+        // エラーが発生しても続行
+      }
+    }
+    
+    // PDFをバイナリに変換
+    console.log('[Background] PDFをバイナリに変換中...');
+    const pdfBytes = await mergedPdf.save();
+    console.log(`[Background] マージ完了 (サイズ: ${pdfBytes.length} bytes)`);
+    
+    // ファイル名を生成
+    const fileName = generateFileName(bookTitle);
+    
+    // Base64エンコードしてデータURLを作成
+    const base64String = uint8ArrayToBase64(pdfBytes);
+    const dataUrl = `data:application/pdf;base64,${base64String}`;
+    
+    // ダウンロード
+    try {
+      await chrome.downloads.download({
+        url: dataUrl,
+        filename: fileName,
+        saveAs: true
+      });
+      
+      console.log(`[Background] PDFをダウンロードしました: ${fileName}`);
+      sendStatusUpdate(`PDFダウンロード完了: ${fileName}`);
+      
+      return { success: true, fileName: fileName, pageCount: pages.length };
+    } catch (downloadError) {
+      throw new Error(`ダウンロードに失敗しました: ${downloadError.message}`);
+    }
+    
+  } catch (error) {
+    console.error('[Background] PDFマージエラー:', error);
+    sendStatusUpdate(`エラー: ${error.message}`);
+    throw error;
+  }
+}
+
+/**
+ * ファイル名を生成
+ * @param {string} bookTitle - 書籍タイトル（オプション）
+ * @returns {string} ファイル名
+ */
+function generateFileName(bookTitle = null) {
+  const now = new Date();
+  const dateStr = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  
+  let fileName = 'oreilly-book';
+  
+  if (bookTitle) {
+    // ファイル名に使用できない文字を置換
+    const sanitizedTitle = bookTitle
+      .replace(/[<>:"/\\|?*]/g, '_')
+      .replace(/\s+/g, '_')
+      .substring(0, 50); // 長すぎる場合は切り詰め
+    fileName = sanitizedTitle;
+  }
+  
+  return `${fileName}_${dateStr}.pdf`;
+}
 
 console.log('[Background] Service Workerが起動しました');
