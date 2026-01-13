@@ -484,23 +484,31 @@ async function mergeAndDownloadPDF(bookTitle = null) {
     // ファイル名を生成
     const fileName = generateFileName(bookTitle);
     
-    // Base64エンコードしてデータURLを作成
-    const base64String = uint8ArrayToBase64(pdfBytes);
-    const dataUrl = `data:application/pdf;base64,${base64String}`;
+    // Blob URLを作成（大きなファイルでも効率的）
+    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+    const blobUrl = URL.createObjectURL(blob);
     
     // ダウンロード
     try {
       await chrome.downloads.download({
-        url: dataUrl,
+        url: blobUrl,
         filename: fileName,
         saveAs: true
       });
+      
+      // Blob URLをクリーンアップ（ダウンロード開始後、少し遅延してから）
+      setTimeout(() => {
+        URL.revokeObjectURL(blobUrl);
+        console.log('[Background] Blob URLをクリーンアップしました');
+      }, 1000);
       
       console.log(`[Background] PDFをダウンロードしました: ${fileName}`);
       sendStatusUpdate(`PDFダウンロード完了: ${fileName}`);
       
       return { success: true, fileName: fileName, pageCount: pages.length };
     } catch (downloadError) {
+      // エラー時もBlob URLをクリーンアップ
+      URL.revokeObjectURL(blobUrl);
       throw new Error(`ダウンロードに失敗しました: ${downloadError.message}`);
     }
     
@@ -513,22 +521,36 @@ async function mergeAndDownloadPDF(bookTitle = null) {
 
 /**
  * ファイル名を生成
+ * Issue #6: 書籍タイトルや日時を含む適切なファイル名を生成
  * @param {string} bookTitle - 書籍タイトル（オプション）
  * @returns {string} ファイル名
  */
 function generateFileName(bookTitle = null) {
   const now = new Date();
-  const dateStr = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  // 日時を読みやすい形式に変換（YYYY-MM-DD_HH-MM-SS）
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  const seconds = String(now.getSeconds()).padStart(2, '0');
+  const dateStr = `${year}-${month}-${day}_${hours}-${minutes}-${seconds}`;
   
   let fileName = 'oreilly-book';
   
-  if (bookTitle) {
+  if (bookTitle && bookTitle.trim()) {
     // ファイル名に使用できない文字を置換
     const sanitizedTitle = bookTitle
-      .replace(/[<>:"/\\|?*]/g, '_')
-      .replace(/\s+/g, '_')
-      .substring(0, 50); // 長すぎる場合は切り詰め
-    fileName = sanitizedTitle;
+      .trim()
+      .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_') // 制御文字も除外
+      .replace(/\s+/g, '_') // 連続する空白を1つのアンダースコアに
+      .replace(/_+/g, '_') // 連続するアンダースコアを1つに
+      .replace(/^_+|_+$/g, '') // 先頭・末尾のアンダースコアを削除
+      .substring(0, 100); // 長すぎる場合は切り詰め（拡張子と日時分を考慮）
+    
+    if (sanitizedTitle) {
+      fileName = sanitizedTitle;
+    }
   }
   
   return `${fileName}_${dateStr}.pdf`;
