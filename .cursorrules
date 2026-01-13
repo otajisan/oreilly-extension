@@ -1,0 +1,189 @@
+# O'Reilly Extension - Cursor Rules
+
+このプロジェクトは、O'Reilly Learningの書籍ページをPDF化してダウンロードするChrome拡張機能です。
+
+## プロジェクト概要
+
+- **プロジェクト名**: O'Reilly Extension
+- **タイプ**: Chrome Extension (Manifest V3)
+- **ビルドツール**: Vite
+- **言語**: JavaScript (ES Modules)
+- **主要ライブラリ**: pdf-lib, Chrome Extension APIs
+
+## アーキテクチャ
+
+### ディレクトリ構造
+
+```
+src/
+├── manifest.json          # 拡張機能マニフェスト（Manifest V3）
+├── background/
+│   └── background.js      # Service Worker（バックグラウンド処理、PDF生成・マージ）
+├── content/
+│   └── content.js         # コンテンツスクリプト（ページ監視、DOM操作）
+├── popup/
+│   ├── popup.html         # ポップアップUI
+│   └── popup.js           # ポップアップロジック
+└── lib/
+    └── db.js              # IndexedDB管理モジュール
+```
+
+### 主要コンポーネント
+
+1. **Service Worker (background.js)**
+   - メッセージハンドリング
+   - PDF生成（Chrome Debugger API使用）
+   - PDFマージ（pdf-lib使用）
+   - IndexedDBとの連携
+
+2. **Content Script (content.js)**
+   - O'Reillyサイトでのページ遷移監視
+   - 次へボタンの自動クリック
+   - 印刷用スタイルの注入
+   - ページレンダリング完了の検知
+
+3. **Popup (popup.js/popup.html)**
+   - ユーザーインターフェース
+   - 開始URL入力
+   - 処理開始/停止制御
+   - ステータス表示
+   - PDFマージ・ダウンロードトリガー
+
+4. **Database (lib/db.js)**
+   - IndexedDB管理
+   - PDFページデータの保存・取得
+   - データクリーンアップ
+
+## コーディング規約
+
+### 言語・スタイル
+
+- **言語**: JavaScript (ES Modules)
+- **モジュールシステム**: ES Modules (`import`/`export`)
+- **コメント**: 日本語で記述（コード説明、関数の目的）
+- **命名規則**: 
+  - 変数・関数: camelCase
+  - 定数: UPPER_SNAKE_CASE
+  - ファイル名: kebab-case (例: `background.js`, `content.js`)
+
+### Chrome Extension API
+
+- Manifest V3仕様に準拠
+- Service Workerは`background.js`として実装
+- メッセージングは`chrome.runtime.sendMessage`/`onMessage`を使用
+- 非同期処理は`async/await`を使用
+
+### エラーハンドリング
+
+- すべての非同期処理で`try-catch`を使用
+- エラーメッセージは日本語で記述
+- ユーザーに表示するエラーは`alert()`またはステータス表示を使用
+
+### ログ
+
+- デバッグ用の`console.log`は`[ComponentName]`プレフィックス付き
+- 例: `[Background]`, `[ContentScript]`, `[DB]`
+- 本番環境でも動作確認用にログを残す
+
+## データフロー
+
+1. **開始フロー**
+   - Popup → Background: `START`メッセージ
+   - Background: IndexedDBクリア、処理状態を初期化
+
+2. **ページ処理フロー**
+   - Background → Content: `NEXT_PAGE_REQUEST`メッセージ
+   - Content: 次へボタンをクリック
+   - Content: ページ遷移を検知、レンダリング完了を待機
+   - Content → Background: `PAGE_READY`メッセージ
+   - Background: PDF生成 (`GENERATE_PDF`)
+   - Background: IndexedDBに保存
+   - 繰り返し
+
+3. **マージ・ダウンロードフロー**
+   - Popup → Background: `MERGE_PDF`メッセージ
+   - Background: IndexedDBから全ページ取得
+   - Background: pdf-libでマージ
+   - Background: ダウンロード実行
+
+## 技術スタック
+
+- **ビルドツール**: Vite 7.3.1
+- **PDF処理**: pdf-lib 1.17.1
+- **ストレージ**: IndexedDB (ブラウザネイティブ)
+- **Chrome APIs**: 
+  - `chrome.debugger` (PDF生成)
+  - `chrome.runtime` (メッセージング)
+  - `chrome.storage` (設定保存)
+  - `chrome.downloads` (ファイルダウンロード)
+  - `chrome.tabs` (タブ操作)
+  - `chrome.scripting` (スクリプト注入)
+
+## 開発時の注意事項
+
+### ビルド
+
+- `npm run build`で`dist`ディレクトリにビルド
+- ビルド後のファイルは`.gitignore`で無視（`dist/`）
+- Chrome拡張機能として読み込む際は`dist`ディレクトリを使用
+
+### デバッグ
+
+- Service Workerのログは`chrome://extensions`の拡張機能詳細から確認
+- Content Scriptのログは対象ページの開発者ツールで確認
+- Popupのログはポップアップの開発者ツールで確認
+
+### メッセージタイプ
+
+プロジェクト全体で使用するメッセージタイプは`background.js`の`MESSAGE_TYPES`定数で定義:
+- `START`: 処理開始
+- `STOP`: 処理停止
+- `PDF_DATA`: PDFデータ受信
+- `NEXT_PAGE_REQUEST`: 次ページへの遷移リクエスト
+- `PAGE_READY`: ページ準備完了
+- `NO_MORE_PAGES`: これ以上のページなし
+- `GENERATE_PDF`: PDF生成リクエスト
+- `MERGE_PDF`: PDFマージ・ダウンロードリクエスト
+
+### IndexedDB
+
+- データベース名: `OReillyDownloaderDB`
+- ストア名: `pdf_pages`
+- キー: `pageNumber` (数値)
+- データ構造: `{ pageNumber: number, data: Uint8Array, timestamp: number }`
+
+## パフォーマンス考慮事項
+
+- 大きなPDFファイルを扱うため、Base64変換はチャンク処理で実装
+- IndexedDBへの保存後はメモリから参照を削除
+- PDFマージ時もメモリ効率を考慮
+
+## セキュリティ
+
+- ホスト権限は`https://*.oreilly.com/*`のみ
+- ユーザーデータはIndexedDBにローカル保存
+- 外部APIへのデータ送信なし
+
+## 追加・修正時のガイドライン
+
+1. **新機能追加時**
+   - メッセージタイプは`MESSAGE_TYPES`に追加
+   - 適切なエラーハンドリングを実装
+   - ログを適切に出力
+
+2. **UI変更時**
+   - `popup.html`と`popup.js`を同時に更新
+   - スタイルは`popup.html`内の`<style>`タグに記述
+
+3. **データ構造変更時**
+   - IndexedDBのスキーマ変更は`db.js`の`onupgradeneeded`で処理
+   - 既存データとの互換性を考慮
+
+## コードレビュー時のチェックポイント
+
+- [ ] Manifest V3仕様に準拠しているか
+- [ ] エラーハンドリングが適切か
+- [ ] メッセージタイプの命名が一貫しているか
+- [ ] ログが適切に出力されているか
+- [ ] メモリリークの可能性がないか
+- [ ] 日本語コメントが適切か

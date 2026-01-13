@@ -1,0 +1,65 @@
+# Cursor Ignore File
+# CursorのAIエージェントが無視すべきファイル・ディレクトリ
+
+# 依存関係
+node_modules/
+package-lock.json
+
+# ビルド出力
+dist/
+build/
+*.tsbuildinfo
+
+# ログファイル
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# キャッシュ
+.cache/
+.parcel-cache/
+.npm/
+.eslintcache
+.stylelintcache
+.vite/
+
+# 環境変数ファイル
+.env
+.env.local
+.env.*.local
+
+# OS固有ファイル
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# IDE設定（プロジェクト固有の設定が必要な場合は含める）
+# .vscode/
+# .idea/
+
+# テストカバレッジ
+coverage/
+*.lcov
+.nyc_output
+
+# 一時ファイル
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# ドキュメント生成（自動生成される場合）
+docs/_build/
+
+# その他
+*.pid
+*.seed
+*.pid.lock
