@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>O'Reilly Extension</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      width: 400px;
+      min-height: 300px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+
+    .container {
+      background: white;
+      border-radius: 8px;
+      padding: 20px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    }
+
+    h1 {
+      font-size: 20px;
+      margin-bottom: 20px;
+      color: #333;
+      text-align: center;
+    }
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      color: #555;
+    }
+
+    input[type="url"] {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 14px;
+      transition: border-color 0.3s;
+    }
+
+    input[type="url"]:focus {
+      outline: none;
+      border-color: #4CAF50;
+    }
+
+    .button-group {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+
+    button {
+      flex: 1;
+      padding: 12px;
+      border: none;
+      border-radius: 4px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background-color 0.3s, transform 0.1s;
+    }
+
+    button:active {
+      transform: scale(0.98);
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .btn-start {
+      background-color: #4CAF50;
+      color: white;
+    }
+
+    .btn-start:hover:not(:disabled) {
+      background-color: #45a049;
+    }
+
+    .btn-stop {
+      background-color: #f44336;
+      color: white;
+    }
+
+    .btn-stop:hover:not(:disabled) {
+      background-color: #da190b;
+    }
+
+    .status-area {
+      background-color: #f9f9f9;
+      border: 1px solid #e0e0e0;
+      border-radius: 4px;
+      padding: 15px;
+      min-height: 60px;
+      font-size: 14px;
+      color: #666;
+    }
+
+    .status-area.active {
+      background-color: #e8f5e9;
+      border-color: #4CAF50;
+      color: #2e7d32;
+    }
+
+    .status-text {
+      margin-bottom: 8px;
+    }
+
+    .status-progress {
+      font-weight: 600;
+      font-size: 16px;
+      color: #4CAF50;
+    }
+
+    .status-idle {
+      color: #999;
+      font-style: italic;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>O'Reilly Extension</h1>
+    
+    <div class="form-group">
+      <label for="startUrl">開始URL</label>
+      <input type="url" id="startUrl" placeholder="https://learning.oreilly.com/library/view/..." />
+    </div>
+
+    <div class="button-group">
+      <button id="btnStart" class="btn-start">取得開始</button>
+      <button id="btnStop" class="btn-stop" disabled>停止</button>
+    </div>
+
+    <div class="status-area" id="statusArea">
+      <div class="status-text status-idle">待機中...</div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
