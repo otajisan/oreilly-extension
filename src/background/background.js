@@ -1,9 +1,11 @@
 // Service Worker for O'Reilly Extension
+import { savePage, getAllPagesSorted, clearAllData } from '../lib/db.js';
 // メッセージハンドリングとページ遷移制御
 
 // 処理状態の管理
 let isProcessing = false;
 let currentUrl = null;
+let currentPageNumber = 0;
 
 // メッセージタイプ定数
 const MESSAGE_TYPES = {
@@ -23,6 +25,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.type === 'stop') {
     handleStop(sendResponse);
     return true; // 非同期レスポンスのため
+  } else if (message.type === 'pdfData') {
+    // Issue #4のPDF生成ロジックから送信されるPDFデータを受け取る
+    handlePdfData(message.pageNumber, message.data, sendResponse);
+    return true; // 非同期レスポンスのため
   }
   
   if (message.type === MESSAGE_TYPES.PAGE_READY) {
@@ -37,6 +43,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       try {
         const result = await generatePDF(message.tabId || sender.tab?.id);
+        
+        // Issue #5: PDFデータをIndexedDBに保存
+        if (result.success && result.data) {
+          const pageNumber = message.pageNumber || currentPageNumber + 1;
+          try {
+            await savePage(pageNumber, result.data);
+            // メモリを解放
+            result.data = null;
+            currentPageNumber = pageNumber;
+            console.log(`[Background] ページ ${pageNumber} をIndexedDBに保存しました`);
+          } catch (saveError) {
+            console.error('[Background] IndexedDBへの保存エラー:', saveError);
+            // 保存エラーが発生してもPDF生成は成功として扱う
+          }
+        }
+        
         sendResponse(result);
       } catch (error) {
         console.error('[Background] PDF生成エラー:', error);
@@ -59,6 +81,11 @@ async function handleStart(url, sendResponse) {
   try {
     isProcessing = true;
     currentUrl = url;
+    currentPageNumber = 0;
+    
+    // 既存のデータをクリーンアップ
+    await clearAllData();
+    console.log('[Background] 既存のデータをクリーンアップしました');
     
     // ここで実際の処理を実装
     // 現時点では基本的な応答のみ
@@ -73,12 +100,13 @@ async function handleStart(url, sendResponse) {
   } catch (error) {
     isProcessing = false;
     currentUrl = null;
+    currentPageNumber = 0;
     sendResponse({ success: false, error: error.message });
   }
 }
 
 // 停止処理
-function handleStop(sendResponse) {
+async function handleStop(sendResponse) {
   if (!isProcessing) {
     sendResponse({ success: false, error: '処理が実行されていません。' });
     return;
@@ -87,6 +115,11 @@ function handleStop(sendResponse) {
   try {
     isProcessing = false;
     currentUrl = null;
+    currentPageNumber = 0;
+    
+    // データをクリーンアップ
+    await clearAllData();
+    console.log('[Background] 停止時にデータをクリーンアップしました');
     
     sendResponse({ success: true });
     
@@ -95,6 +128,39 @@ function handleStop(sendResponse) {
     sendMessageToPopup({ type: 'stopped' });
     
   } catch (error) {
+    sendResponse({ success: false, error: error.message });
+  }
+}
+
+/**
+ * PDFデータを受け取ってIndexedDBに保存
+ * Issue #4のPDF生成ロジックから呼び出される
+ * @param {number} pageNumber - ページ番号
+ * @param {Uint8Array} pdfData - PDFバイナリデータ
+ * @param {function} sendResponse - レスポンス送信関数
+ */
+async function handlePdfData(pageNumber, pdfData, sendResponse) {
+  try {
+    if (!pdfData || !(pdfData instanceof Uint8Array)) {
+      throw new Error('無効なPDFデータです');
+    }
+    
+    // IndexedDBに保存
+    await savePage(pageNumber, pdfData);
+    
+    // メモリを解放（参照を削除）
+    pdfData = null;
+    
+    console.log(`[Background] ページ ${pageNumber} をIndexedDBに保存しました`);
+    
+    sendResponse({ success: true, pageNumber });
+    
+    // 進行状況を更新
+    currentPageNumber = pageNumber;
+    sendProgressUpdate(pageNumber, 0); // totalは後で更新可能
+    
+  } catch (error) {
+    console.error('[Background] PDFデータの保存エラー:', error);
     sendResponse({ success: false, error: error.message });
   }
 }
