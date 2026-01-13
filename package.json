@@ -1,0 +1,33 @@
+{
+  "name": "oreilly-extension",
+  "version": "1.0.0",
+  "description": "O'Reilly Learning Extension",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/otajisan/oreilly-extension.git"
+  },
+  "keywords": [],
+  "author": "otajisan",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/otajisan/oreilly-extension/issues"
+  },
+  "homepage": "https://github.com/otajisan/oreilly-extension#readme",
+  "volta": {
+    "node": "24.11.1",
+    "npm": "11.6.2"
+  },
+  "dependencies": {
+    "pdf-lib": "^1.17.1"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.1.33",
+    "vite": "^7.3.1"
+  }
+}
