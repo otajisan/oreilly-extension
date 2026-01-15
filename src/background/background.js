@@ -342,6 +342,11 @@ async function processCurrentPage(tabId) {
     console.log('[Background] 現在のページのPDFを生成します (tabId:', tabId, ')');
     sendStatusUpdate(`PDF生成中... (ページ ${currentPageNumber + 1})`);
     
+    // Issue #19: PAGE_READY後のレイアウト再計算を待機（500ms程度）
+    console.log('[Background] レイアウト再計算を待機中...');
+    await new Promise(resolve => setTimeout(resolve, 500));
+    console.log('[Background] レイアウト再計算完了');
+    
     // PDFを生成
     const result = await generatePDF(tabId);
     
