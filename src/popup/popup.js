@@ -13,6 +13,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   // 保存されたURLを復元
   await loadSavedUrl();
   
+  // 既存の処理状態を確認
+  await syncProcessingStatus();
+  
   // バックグラウンドからのステータス更新をリッスン
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === 'statusUpdate') {
@@ -41,6 +44,27 @@ async function loadSavedUrl() {
     }
   } catch (error) {
     console.error('URLの復元に失敗しました:', error);
+  }
+}
+
+// バックグラウンドの処理状態を同期
+async function syncProcessingStatus() {
+  try {
+    const response = await chrome.runtime.sendMessage({ type: 'getStatus' });
+    if (response && response.success) {
+      isRunning = response.isProcessing;
+      updateUIState(isRunning);
+      if (isRunning) {
+        const currentPage = response.currentPageNumber || 0;
+        if (currentPage > 0) {
+          updateProgress(currentPage, 0);
+        } else {
+          updateStatus('処理中...');
+        }
+      }
+    }
+  } catch (error) {
+    console.error('状態の同期に失敗しました:', error);
   }
 }
 
@@ -142,7 +166,10 @@ function updateStatus(statusText) {
 
 // 進行状況の更新
 function updateProgress(current, total) {
-  const statusText = `${current}/${total} ページ処理中`;
+  const hasTotal = Number.isFinite(total) && total > 0;
+  const statusText = hasTotal
+    ? `${current}/${total} ページ処理中`
+    : `${current} ページ処理中`;
   updateStatus(statusText);
   
   // 進行状況を表示

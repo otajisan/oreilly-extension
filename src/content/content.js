@@ -5,7 +5,8 @@
 const MESSAGE_TYPES = {
   NEXT_PAGE_REQUEST: 'NEXT_PAGE_REQUEST',
   PAGE_READY: 'PAGE_READY',
-  NO_MORE_PAGES: 'NO_MORE_PAGES'
+  NO_MORE_PAGES: 'NO_MORE_PAGES',
+  REQUEST_PAGE_READY: 'REQUEST_PAGE_READY'
 };
 
 // スリープ関数（async/await用）
@@ -65,15 +66,33 @@ function injectPrintStyles() {
 async function clickNextButton() {
   console.log('[ContentScript] 次へボタンを検索中...');
   
-  // 部分一致セレクタを使用
-  const nextButton = document.querySelector('a[class*="nextContainer"]');
+  // セレクタ候補（優先度順）
+  const selectorCandidates = [
+    'nav#content-navigation div[class*="nextContainer"] a',
+    'div[class*="nextContainer"] a',
+    'a[aria-label*="Next"]'
+  ];
+  
+  let nextButton = null;
+  let matchedSelector = null;
+  for (const selector of selectorCandidates) {
+    const candidate = document.querySelector(selector);
+    if (candidate) {
+      nextButton = candidate;
+      matchedSelector = selector;
+      break;
+    }
+  }
   
   if (!nextButton) {
     console.log('[ContentScript] 次へボタンが見つかりませんでした');
+    console.log('[ContentScript] 試行したセレクタ:', selectorCandidates);
+    console.log('[ContentScript] 次へ候補数（nextContainer）:', document.querySelectorAll('div[class*="nextContainer"] a').length);
+    console.log('[ContentScript] 次へ候補数（aria-label）:', document.querySelectorAll('a[aria-label*="Next"]').length);
     return false;
   }
   
-  console.log('[ContentScript] 次へボタンが見つかりました。クリックします...');
+  console.log('[ContentScript] 次へボタンが見つかりました。クリックします...', matchedSelector);
   nextButton.click();
   return true;
 }
@@ -83,6 +102,27 @@ let currentUrl = window.location.href;
 let isProcessing = false;
 let mutationObserver = null;
 let urlCheckInterval = null;
+
+// 拡張機能が無効化された場合に備えて安全に送信
+async function safeSendMessage(message) {
+  if (!chrome?.runtime?.id) {
+    console.log('[ContentScript] 拡張機能コンテキストが無効のため送信をスキップします');
+    return false;
+  }
+  
+  try {
+    await chrome.runtime.sendMessage(message);
+    return true;
+  } catch (error) {
+    const errorMessage = error?.message || '';
+    if (errorMessage.includes('Extension context invalidated')) {
+      console.log('[ContentScript] 拡張機能コンテキストが無効化されています');
+      return false;
+    }
+    console.error('[ContentScript] メッセージ送信エラー:', error);
+    return false;
+  }
+}
 
 async function waitForPageReady() {
   if (isProcessing) {
@@ -130,15 +170,13 @@ async function waitForPageReady() {
   console.log('[ContentScript] レンダリング完了を確認しました');
   
   // バックグラウンドに通知
-  try {
-    await chrome.runtime.sendMessage({
-      type: MESSAGE_TYPES.PAGE_READY,
-      url: window.location.href,
-      timestamp: Date.now()
-    });
+  const sent = await safeSendMessage({
+    type: MESSAGE_TYPES.PAGE_READY,
+    url: window.location.href,
+    timestamp: Date.now()
+  });
+  if (sent) {
     console.log('[ContentScript] PAGE_READYメッセージを送信しました');
-  } catch (error) {
-    console.error('[ContentScript] メッセージ送信エラー:', error);
   }
   
   isProcessing = false;
@@ -219,6 +257,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // 非同期処理のためtrueを返す
     return true;
   }
+
+  if (message.type === MESSAGE_TYPES.REQUEST_PAGE_READY) {
+    (async () => {
+      try {
+        await waitForPageReady();
+        sendResponse({ success: true });
+      } catch (error) {
+        console.error('[ContentScript] PAGE_READYリクエストエラー:', error);
+        sendResponse({ success: false, error: error.message });
+      }
+    })();
+    
+    return true;
+  }
 });
 
 // 初期化
@@ -237,9 +289,16 @@ function init() {
   console.log('[ContentScript] 初期化が完了しました');
 }
 
-// DOMContentLoadedまたは既に読み込み済みの場合
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', init);
+// 二重初期化を防止
+if (window.__oreillyExtensionInitialized) {
+  console.log('[ContentScript] 既に初期化済みのためスキップします');
 } else {
-  init();
+  window.__oreillyExtensionInitialized = true;
+  
+  // DOMContentLoadedまたは既に読み込み済みの場合
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
 }
