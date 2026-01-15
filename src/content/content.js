@@ -27,33 +27,88 @@ function injectPrintStyles() {
   style.id = styleId;
   style.textContent = `
     @media print {
-      /* ヘッダー非表示 */
-      #orm-global-site-header {
-        display: none !important;
-      }
-      
-      /* サイドバー非表示 */
+      /* 本文以外のコンテナも含めて非表示を徹底 */
+      #orm-global-site-header, 
+      nav, 
+      aside, 
+      footer,
+      [class*="sidebar"],
+      [class*="nav-controls"],
       section[class*="iconMenu"],
-      aside {
-        display: none !important;
-      }
-      
-      /* フッター非表示 */
       #content-navigation {
         display: none !important;
       }
       
-      /* コントロール非表示 */
-      section[class*="iconMenu"] {
-        display: none !important;
-      }
-      
-      /* 本文領域の調整 */
-      main,
-      #content-panel {
+      /* 本文領域をページいっぱいに広げる */
+      html, body, main, #content-panel, .content-panel, #book-content, article {
         width: 100% !important;
         margin: 0 !important;
         padding: 0 !important;
+        overflow: visible !important;
+      }
+      
+      /* 本文が隠れてしまうケースの回避 */
+      #content-panel,
+      #content-panel > section,
+      .content-panel,
+      #book-content,
+      [data-testid="contentViewer"],
+      [data-testid="enhancedAnnotatable"],
+      .orm-ChapterReader-readerContainer,
+      #sbo-rt-content,
+      .content-body,
+      .reader-content,
+      .reading-pane,
+      .page-content,
+      article,
+      main {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        transform: none !important;
+        height: auto !important;
+      }
+      
+      /* O'Reillyの本文コンテナはmax-width指定があるため解除 */
+      .orm-ChapterReader-readerContainer,
+      #book-content,
+      #sbo-rt-content {
+        width: 100% !important;
+        max-width: 100% !important;
+        margin: 0 !important;
+      }
+
+      /* 読みやすさのため本文を中央寄せにする */
+      #content-panel > section,
+      [data-testid="contentViewer"],
+      #book-content,
+      .orm-ChapterReader-readerContainer,
+      #sbo-rt-content {
+        width: 96ch !important;
+        max-width: 96ch !important;
+        margin-left: auto !important;
+        margin-right: auto !important;
+      }
+
+      /* 印刷プレビューで親sectionが非表示になるのを防ぐ */
+      #content-panel > section {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        height: auto !important;
+      }
+      
+      /* 印刷時に本文配下が隠れるのを防ぐ */
+      body,
+      [data-testid="contentViewer"],
+      [data-testid="contentViewer"] * {
+        visibility: visible !important;
+      }
+      
+      /* PDF出力時のスケーリング対策 */
+      @page {
+        size: auto;
+        margin: 10mm;
       }
     }
   `;
@@ -168,6 +223,11 @@ async function waitForPageReady() {
   }
   
   console.log('[ContentScript] レンダリング完了を確認しました');
+  
+  // DOMクレンジング（印刷用スタイルの注入）を確実に実施
+  injectPrintStyles();
+  // スタイル適用とレイアウト反映のために短時間待機
+  await sleep(100);
   
   // バックグラウンドに通知
   const sent = await safeSendMessage({
