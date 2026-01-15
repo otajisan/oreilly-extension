@@ -8,14 +8,20 @@ let isProcessing = false;
 let currentUrl = null;
 let currentPageNumber = 0;
 
+// PAGE_READY待機用のPromise解決関数
+let pageReadyResolver = null;
+let waitingTabId = null;
+
 // メッセージタイプ定数
 const MESSAGE_TYPES = {
   START: 'start',
   STOP: 'stop',
+  GET_STATUS: 'getStatus',
   PDF_DATA: 'pdfData',
   NEXT_PAGE_REQUEST: 'NEXT_PAGE_REQUEST',
   PAGE_READY: 'PAGE_READY',
   NO_MORE_PAGES: 'NO_MORE_PAGES',
+  REQUEST_PAGE_READY: 'REQUEST_PAGE_READY',
   GENERATE_PDF: 'GENERATE_PDF',
   MERGE_PDF: 'MERGE_PDF'
 };
@@ -34,6 +40,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     handleStop(sendResponse);
     return true; // 非同期レスポンスのため
   }
+
+  if (message.type === MESSAGE_TYPES.GET_STATUS || message.type === 'getStatus') {
+    sendResponse({
+      success: true,
+      isProcessing,
+      currentPageNumber
+    });
+    return true;
+  }
   
   if (message.type === MESSAGE_TYPES.PDF_DATA || message.type === 'pdfData') {
     // Issue #4のPDF生成ロジックから送信されるPDFデータを受け取る
@@ -43,7 +58,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   
   if (message.type === MESSAGE_TYPES.PAGE_READY) {
     console.log('[Background] PAGE_READYを受信しました:', message.url);
-    // ページ準備完了時の処理（必要に応じて追加）
+    
+    // 待機中のPromiseがあれば解決
+    if (pageReadyResolver && sender.tab?.id === waitingTabId) {
+      pageReadyResolver();
+      pageReadyResolver = null;
+      waitingTabId = null;
+    }
+    
     sendResponse({ success: true });
     return true;
   }
@@ -113,21 +135,232 @@ async function handleStart(url, sendResponse) {
     await clearAllData();
     console.log('[Background] 既存のデータをクリーンアップしました');
     
-    // ここで実際の処理を実装
-    // 現時点では基本的な応答のみ
+    // 応答を送信（非同期処理を開始する前に）
     sendResponse({ success: true });
     
     // ステータス更新を送信
     sendStatusUpdate('処理を開始しました...');
     
-    // TODO: 実際のページ取得処理をここに実装
-    // 例: processPages(url);
+    // 非同期でページ処理を開始
+    processPages(url).catch((error) => {
+      console.error('[Background] ページ処理エラー:', error);
+      isProcessing = false;
+      currentUrl = null;
+      currentPageNumber = 0;
+      sendStatusUpdate(`エラー: ${error.message}`);
+    });
     
   } catch (error) {
     isProcessing = false;
     currentUrl = null;
     currentPageNumber = 0;
     sendResponse({ success: false, error: error.message });
+  }
+}
+
+// ページ処理のメインループ
+async function processPages(startUrl) {
+  console.log('[Background] ページ処理を開始します:', startUrl);
+  
+  try {
+    // 1. タブを開く（または既存のタブを使用）
+    let tab = await findOrCreateTab(startUrl);
+    if (!tab) {
+      throw new Error('タブを開けませんでした');
+    }
+    
+    console.log('[Background] タブを取得しました (tabId:', tab.id, ')');
+    
+    // 2. タブが完全に読み込まれるまで待機
+    await waitForTabReady(tab.id);
+    
+    // 3. Content Scriptの初期化を待つ（PAGE_READYメッセージを待つ）
+    try {
+      const pageReadyPromise = waitForPageReady(tab.id, 10000); // 10秒タイムアウト
+      await ensureContentScript(tab.id);
+      await requestPageReady(tab.id);
+      await pageReadyPromise;
+      console.log('[Background] 最初のページの準備完了を確認しました');
+    } catch (error) {
+      console.warn('[Background] PAGE_READY待機タイムアウト、続行します:', error.message);
+      // タイムアウトしても続行（既に準備完了している可能性がある）
+      await new Promise(resolve => setTimeout(resolve, 2000)); // 追加の待機
+    }
+    
+    // 4. 最初のページのPDFを生成
+    await processCurrentPage(tab.id);
+    
+    // 5. 次へボタンをクリックして次のページに遷移し、PDFを生成するループ
+    let pageCount = 1;
+    const MAX_PAGES = 1000; // 無限ループ防止
+    
+    while (pageCount < MAX_PAGES && isProcessing) {
+      console.log(`[Background] ページ ${pageCount + 1} の処理を開始します`);
+      
+      // 次へボタンをクリック
+      const nextResult = await requestNextPage(tab.id);
+      
+      if (!nextResult.success) {
+        if (nextResult.noMorePages) {
+          console.log('[Background] これ以上のページはありません');
+          sendStatusUpdate(`処理完了: ${pageCount} ページを処理しました`);
+          break;
+        } else {
+          console.error('[Background] 次へボタンのクリックに失敗しました');
+          throw new Error('次へボタンのクリックに失敗しました');
+        }
+      }
+      
+      // ページ遷移を待機（PAGE_READYメッセージを待つ）
+      await waitForPageReady(tab.id);
+      
+      // 現在のページのPDFを生成
+      await processCurrentPage(tab.id);
+      
+      pageCount++;
+      
+      // 進行状況を更新
+      sendProgressUpdate(pageCount, 0); // totalは不明のため0
+    }
+    
+    if (pageCount >= MAX_PAGES) {
+      console.warn('[Background] 最大ページ数に達しました');
+      sendStatusUpdate(`処理完了: ${pageCount} ページを処理しました（最大ページ数に達しました）`);
+    }
+    
+    isProcessing = false;
+    console.log('[Background] ページ処理が完了しました');
+    
+  } catch (error) {
+    isProcessing = false;
+    throw error;
+  }
+}
+
+// タブを探すか作成する
+async function findOrCreateTab(url) {
+  try {
+    // 既存のタブを探す
+    const tabs = await chrome.tabs.query({ url: url });
+    if (tabs.length > 0) {
+      console.log('[Background] 既存のタブを使用します:', tabs[0].id);
+      return tabs[0];
+    }
+    
+    // タブが存在しない場合は新規作成
+    console.log('[Background] 新しいタブを作成します');
+    const tab = await chrome.tabs.create({ url: url, active: false });
+    return tab;
+  } catch (error) {
+    console.error('[Background] タブの取得/作成エラー:', error);
+    throw error;
+  }
+}
+
+// タブが完全に読み込まれるまで待機
+async function waitForTabReady(tabId) {
+  return new Promise((resolve, reject) => {
+    const checkTab = async () => {
+      try {
+        const tab = await chrome.tabs.get(tabId);
+        if (tab.status === 'complete') {
+          console.log('[Background] タブの読み込みが完了しました');
+          // 追加の待機時間（コンテンツのレンダリング待ち）
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          resolve();
+        } else {
+          // まだ読み込み中なので再チェック
+          setTimeout(checkTab, 500);
+        }
+      } catch (error) {
+        reject(error);
+      }
+    };
+    
+    checkTab();
+  });
+}
+
+// Content Scriptを確実に注入（既に注入済みでも安全）
+async function ensureContentScript(tabId) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        return Boolean(window.__oreillyExtensionInitialized);
+      }
+    });
+    const alreadyInitialized = results && results[0] && results[0].result;
+    if (alreadyInitialized) {
+      console.log('[Background] Content Scriptは既に初期化済みです');
+      return;
+    }
+    
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['content/content.js']
+    });
+    console.log('[Background] Content Scriptを確認/注入しました');
+  } catch (error) {
+    console.error('[Background] Content Scriptの注入エラー:', error);
+  }
+}
+
+// ページ準備完了を待機（PAGE_READYメッセージを待つ）
+async function waitForPageReady(tabId, timeout = 30000) {
+  return new Promise((resolve, reject) => {
+    // 既に待機中の場合はエラー
+    if (pageReadyResolver) {
+      reject(new Error('既に別のページ待機が実行中です'));
+      return;
+    }
+    
+    // タイムアウト設定
+    const timeoutId = setTimeout(() => {
+      if (pageReadyResolver === resolve) {
+        pageReadyResolver = null;
+        waitingTabId = null;
+        reject(new Error('ページ準備完了のタイムアウト'));
+      }
+    }, timeout);
+    
+    // 待機状態を設定（タイムアウトをクリアするラッパー付き）
+    const originalResolver = resolve;
+    pageReadyResolver = () => {
+      clearTimeout(timeoutId);
+      pageReadyResolver = null;
+      waitingTabId = null;
+      originalResolver();
+    };
+    waitingTabId = tabId;
+  });
+}
+
+// 現在のページのPDFを生成して保存
+async function processCurrentPage(tabId) {
+  try {
+    console.log('[Background] 現在のページのPDFを生成します (tabId:', tabId, ')');
+    sendStatusUpdate(`PDF生成中... (ページ ${currentPageNumber + 1})`);
+    
+    // PDFを生成
+    const result = await generatePDF(tabId);
+    
+    if (result.success && result.data) {
+      // IndexedDBに保存
+      currentPageNumber++;
+      await savePage(currentPageNumber, result.data);
+      
+      // メモリを解放
+      result.data = null;
+      
+      console.log(`[Background] ページ ${currentPageNumber} をIndexedDBに保存しました`);
+      sendProgressUpdate(currentPageNumber, 0);
+    } else {
+      throw new Error('PDF生成に失敗しました');
+    }
+  } catch (error) {
+    console.error('[Background] ページ処理エラー:', error);
+    throw error;
   }
 }
 
@@ -243,6 +476,19 @@ async function requestNextPage(tabId) {
   } catch (error) {
     console.error('[Background] エラー:', error);
     return { success: false, error: error.message };
+  }
+}
+
+// Content ScriptにPAGE_READYの再送をリクエスト
+async function requestPageReady(tabId) {
+  try {
+    await chrome.tabs.sendMessage(tabId, {
+      type: MESSAGE_TYPES.REQUEST_PAGE_READY
+    });
+    return true;
+  } catch (error) {
+    console.warn('[Background] PAGE_READYリクエスト送信に失敗しました:', error);
+    return false;
   }
 }
 
